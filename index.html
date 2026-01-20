@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>2-Player Snake</title>
+    <style>
+        body {
+            font-family: 'Courier New', Courier, monospace;
+            background-color: #1a1a1a;
+            color: white;
+            text-align: center;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            overflow: hidden;
+        }
+
+        /* HUD */
+        .scoreboard {
+            display: flex;
+            justify-content: space-between;
+            width: 90vw;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        .p1-score { color: cyan; }
+        .p2-score { color: lime; }
+
+        canvas {
+            background-color: #000;
+            border: 2px solid #555;
+            max-width: 95vw;
+            max-height: 50vh; /* Leave room for buttons */
+        }
+
+        /* Controls Container */
+        .controls-area {
+            display: flex;
+            justify-content: space-between;
+            width: 100%;
+            padding: 10px 20px;
+            box-sizing: border-box;
+            margin-top: 10px;
+        }
+
+        .dpad {
+            display: grid;
+            grid-template-columns: 50px 50px 50px;
+            grid-template-rows: 50px 50px;
+            gap: 5px;
+        }
+
+        .btn {
+            background-color: #333;
+            border: 2px solid #555;
+            color: white;
+            border-radius: 8px;
+            font-size: 1.2rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            user-select: none;
+            touch-action: manipulation;
+        }
+
+        .btn:active { transform: scale(0.9); }
+
+        /* Color coding buttons */
+        .p1-btn { border-color: cyan; color: cyan; }
+        .p2-btn { border-color: lime; color: lime; }
+
+        /* Grid positioning */
+        .up { grid-column: 2; grid-row: 1; }
+        .left { grid-column: 1; grid-row: 2; }
+        .down { grid-column: 2; grid-row: 2; }
+        .right { grid-column: 3; grid-row: 2; }
+
+    </style>
+</head>
+<body>
+
+    <div class="scoreboard">
+        <div class="p1-score">P1 (Blue): <span id="s1">0</span></div>
+        <div class="p2-score">P2 (Green): <span id="s2">0</span></div>
+    </div>
+    
+    <canvas id="board"></canvas>
+
+    <div class="controls-area">
+        <div class="dpad">
+            <div class="btn up p1-btn" ontouchstart="dir1(0, -1)" onclick="dir1(0, -1)">▲</div>
+            <div class="btn left p1-btn" ontouchstart="dir1(-1, 0)" onclick="dir1(-1, 0)">◀</div>
+            <div class="btn down p1-btn" ontouchstart="dir1(0, 1)" onclick="dir1(0, 1)">▼</div>
+            <div class="btn right p1-btn" ontouchstart="dir1(1, 0)" onclick="dir1(1, 0)">▶</div>
+        </div>
+
+        <div class="dpad">
+            <div class="btn up p2-btn" ontouchstart="dir2(0, -1)" onclick="dir2(0, -1)">▲</div>
+            <div class="btn left p2-btn" ontouchstart="dir2(-1, 0)" onclick="dir2(-1, 0)">◀</div>
+            <div class="btn down p2-btn" ontouchstart="dir2(0, 1)" onclick="dir2(0, 1)">▼</div>
+            <div class="btn right p2-btn" ontouchstart="dir2(1, 0)" onclick="dir2(1, 0)">▶</div>
+        </div>
+    </div>
+
+    <script>
+        const blockSize = 20;
+        const rows = 25;
+        const cols = 35; // Wider for 2 players
+        let board, context;
+
+        // Player 1 (Blue)
+        let snake1 = { x: blockSize * 5, y: blockSize * 5, dx: 0, dy: 0, body: [], score: 0, color: "cyan" };
+        
+        // Player 2 (Green)
+        let snake2 = { x: blockSize * 25, y: blockSize * 5, dx: 0, dy: 0, body: [], score: 0, color: "lime" };
+
+        let food = { x: 0, y: 0 };
+        let gameOver = false;
+
+        window.onload = function() {
+            board = document.getElementById("board");
+            // Set canvas size dynamically based on screen logic, but fixed grid for game logic
+            board.height = rows * blockSize;
+            board.width = cols * blockSize;
+            context = board.getContext("2d");
+
+            placeFood();
+            setInterval(update, 100);
+        }
+
+        function update() {
+            if (gameOver) return;
+
+            // Draw Background
+            context.fillStyle = "black";
+            context.fillRect(0, 0, board.width, board.height);
+
+            // Draw Food
+            context.fillStyle = "red";
+            context.fillRect(food.x, food.y, blockSize, blockSize);
+
+            // Move & Draw Player 1
+            moveSnake(snake1);
+            drawSnake(snake1);
+
+            // Move & Draw Player 2
+            moveSnake(snake2);
+            drawSnake(snake2);
+
+            checkCollisions();
+        }
+
+        function moveSnake(snake) {
+            // Move Body
+            for (let i = snake.body.length - 1; i > 0; i--) {
+                snake.body[i] = snake.body[i-1];
+            }
+            if (snake.body.length) {
+                snake.body[0] = [snake.x, snake.y];
+            }
+
+            // Move Head
+            snake.x += snake.dx * blockSize;
+            snake.y += snake.dy * blockSize;
+
+            // Eating Food
+            if (snake.x == food.x && snake.y == food.y) {
+                snake.body.push([food.x, food.y]);
+                snake.score += 10;
+                updateScore();
+                placeFood();
+            }
+        }
+
+        function drawSnake(snake) {
+            context.fillStyle = snake.color;
+            snake.body.forEach(part => {
+                context.fillRect(part[0], part[1], blockSize, blockSize);
+            });
+            context.fillRect(snake.x, snake.y, blockSize, blockSize);
+        }
+
+        function checkCollisions() {
+            // Check Walls & Self/Opponent Collision
+            if (checkCrash(snake1) || checkCrash(snake2) || checkHeadCollision()) {
+                gameOver = true;
+                alert("Game Over! Tap refresh to restart.");
+            }
+        }
+
+        function checkCrash(snake) {
+            // Walls
+            if (snake.x < 0 || snake.x >= cols*blockSize || snake.y < 0 || snake.y >= rows*blockSize) return true;
+            
+            // Hit own body
+            for (let i = 0; i < snake.body.length; i++) {
+                if (snake.x == snake.body[i][0] && snake.y == snake.body[i][1]) return true;
+            }
+
+            // Hit opponent body (opponent is the OTHER snake)
+            let opponent = (snake === snake1) ? snake2 : snake1;
+            for (let i = 0; i < opponent.body.length; i++) {
+                if (snake.x == opponent.body[i][0] && snake.y == opponent.body[i][1]) return true;
+            }
+            return false;
+        }
+
+        function checkHeadCollision() {
+            return snake1.x === snake2.x && snake1.y === snake2.y;
+        }
+
+        function placeFood() {
+            food.x = Math.floor(Math.random() * cols) * blockSize;
+            food.y = Math.floor(Math.random() * rows) * blockSize;
+        }
+
+        function updateScore() {
+            document.getElementById("s1").innerText = snake1.score;
+            document.getElementById("s2").innerText = snake2.score;
+        }
+
+        // Controls
+        function dir1(x, y) {
+            if (snake1.dx === -x && x !== 0) return; // Prevent reversing
+            if (snake1.dy === -y && y !== 0) return;
+            snake1.dx = x;
+            snake1.dy = y;
+        }
+        function dir2(x, y) {
+            if (snake2.dx === -x && x !== 0) return;
+            if (snake2.dy === -y && y !== 0) return;
+            snake2.dx = x;
+            snake2.dy = y;
+        }
+    </script>
+</body>
+</html>
