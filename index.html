@@ -1,182 +1,299 @@
-<script>
-        // --- GAME VARIABLES ---
-        const blockSize = 20;
-        const rows = 25;
-        const cols = 20;
-        let board, context;
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Snake Duel - P2 Fix</title>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <style>
+        body {
+            font-family: 'Courier New', Courier, monospace;
+            background-color: #1a1a1a;
+            color: white;
+            text-align: center;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            overflow: hidden;
+        }
+
+        /* LOBBY STYLES */
+        #lobby {
+            background: #333;
+            padding: 20px;
+            border-radius: 10px;
+            border: 2px solid #555;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            z-index: 100;
+        }
+        input { padding: 10px; text-align: center; width: 200px; font-size: 1rem; }
+        button {
+            padding: 10px 20px; font-size: 1.2rem; cursor: pointer;
+            border: none; border-radius: 5px; font-weight: bold;
+        }
+        .host-btn { background: cyan; color: black; }
+        .join-btn { background: lime; color: black; }
+
+        /* GAME STYLES */
+        #game-ui { display: none; width: 100%; flex-direction: column; align-items: center; }
+        
+        canvas {
+            background-color: #000;
+            border: 2px solid #555;
+            box-shadow: 0 0 20px rgba(0,0,0,0.5);
+            /* Fit to screen width but keep aspect ratio roughly */
+            width: 95vw; 
+            max-width: 400px;
+            height: auto;
+            aspect-ratio: 1/1;
+        }
+
+        .status-bar { margin-bottom: 10px; color: yellow; font-size: 0.9rem; }
+
+        /* CONTROLS */
+        .controls {
+            margin-top: 20px;
+            display: grid;
+            grid-template-columns: 70px 70px 70px;
+            grid-template-rows: 70px 70px;
+            gap: 8px;
+        }
+        .btn {
+            background-color: #444;
+            color: white;
+            border-radius: 12px;
+            font-size: 1.8rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            user-select: none;
+            touch-action: manipulation; /* vital for mobile response */
+            height: 70px;
+            width: 70px;
+            box-shadow: 0 4px #222;
+        }
+        .btn:active { background-color: #666; transform: translateY(4px); box-shadow: 0 0; }
+        
+        .up { grid-column: 2; grid-row: 1; }
+        .left { grid-column: 1; grid-row: 2; }
+        .down { grid-column: 2; grid-row: 2; }
+        .right { grid-column: 3; grid-row: 2; }
+
+    </style>
+</head>
+<body>
+
+    <div id="lobby">
+        <h2>🐍 Snake Duel</h2>
+        <div id="loading">Connecting to server...</div>
+        
+        <div id="menu" style="display:none;">
+            <div>
+                <p style="margin:5px">YOUR ID:</p>
+                <input type="text" id="my-id" readonly onclick="this.select()">
+                <p style="font-size:0.8rem; color:#aaa;">(Share this with your friend)</p>
+            </div>
+            
+            <div style="border-top: 1px solid #555; padding-top: 15px;">
+                <p style="margin:5px">FRIEND'S ID:</p>
+                <input type="text" id="friend-id" placeholder="Paste ID here">
+                <br><br>
+                <button class="join-btn" onclick="joinGame()">JOIN GAME</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="game-ui">
+        <div class="status-bar" id="status">Waiting for connection...</div>
+        <canvas id="board" width="400" height="400"></canvas>
+        
+        <div class="controls">
+            <div class="btn up" ontouchstart="handleInput('up')" onmousedown="handleInput('up')">▲</div>
+            <div class="btn left" ontouchstart="handleInput('left')" onmousedown="handleInput('left')">◀</div>
+            <div class="btn down" ontouchstart="handleInput('down')" onmousedown="handleInput('down')">▼</div>
+            <div class="btn right" ontouchstart="handleInput('right')" onmousedown="handleInput('right')">▶</div>
+        </div>
+    </div>
+
+    <script>
+        // --- CONFIG ---
+        const GRID_SIZE = 20; // 20x20 grid
+        const TILE_COUNT = 20; 
+        const TILE_SIZE = 400 / TILE_COUNT; // Canvas is 400px
+        
+        let canvas, ctx;
         let isHost = false;
-        
-        // P1 = Host (Blue), P2 = Guest (Lime)
-        // We track direction (dx, dy) separately to prevent "lag fighting"
-        let p1 = { x: 5*blockSize, y: 5*blockSize, dx: 0, dy: 0, body: [], color: "cyan" };
-        let p2 = { x: 15*blockSize, y: 15*blockSize, dx: 0, dy: 0, body: [], color: "lime" };
-        let food = { x: 10*blockSize, y: 10*blockSize };
+        let conn = null;
+        let peer = null;
 
-        // --- NETWORKING VARIABLES ---
-        let peer;
-        let conn;
-        
+        // Game State
+        let gameState = {
+            p1: { x: 5, y: 5, dx: 1, dy: 0, body: [], color: "cyan" },
+            p2: { x: 15, y: 15, dx: -1, dy: 0, body: [], color: "lime" },
+            food: { x: 10, y: 10 }
+        };
+
+        // --- SETUP ---
         window.onload = function() {
-            peer = new Peer(); 
+            canvas = document.getElementById("board");
+            ctx = canvas.getContext("2d");
+            
+            // Initialize PeerJS
+            peer = new Peer();
 
-            peer.on('open', function(id) {
+            peer.on('open', (id) => {
                 document.getElementById('loading').style.display = 'none';
                 document.getElementById('menu').style.display = 'block';
                 document.getElementById('my-id').value = id;
             });
 
-            // If someone connects to us (We are Host)
-            peer.on('connection', function(c) {
+            peer.on('connection', (c) => {
+                // I am the HOST
                 conn = c;
                 isHost = true;
-                setupConnection();
+                setupGame();
             });
-        }
+        };
 
         function joinGame() {
-            // .trim() removes accidental spaces from copy-pasting
-            let friendId = document.getElementById('friend-id').value.trim();
-            if(!friendId) return alert("Enter an ID!");
+            const friendId = document.getElementById('friend-id').value.trim();
+            if (!friendId) return alert("Please enter Friend's ID");
             
+            // I am the GUEST
             conn = peer.connect(friendId);
             isHost = false;
-            setupConnection();
+            setupGame();
         }
 
-        function setupConnection() {
+        function setupGame() {
             document.getElementById('lobby').style.display = 'none';
-            document.getElementById('game-area').style.display = 'flex';
+            document.getElementById('game-ui').style.display = 'flex';
             
-            board = document.getElementById("board");
-            board.height = rows * blockSize;
-            board.width = cols * blockSize;
-            context = board.getContext("2d");
-
-            // Handle incoming data
-            conn.on('data', function(data) {
-                // 1. Handling Moves (Host receives Guest input)
-                if(data.type === 'move') {
-                    // Only Host processes moves from network
-                    if (isHost) {
-                        if(p2.dx !== -data.dx && p2.dy !== -data.dy) {
-                            p2.dx = data.dx;
-                            p2.dy = data.dy;
-                        }
+            // Listen for data
+            conn.on('data', (data) => {
+                if (isHost) {
+                    // HOST receives input from GUEST
+                    if (data.type === 'input') {
+                        processInput(gameState.p2, data.dir);
+                    }
+                } else {
+                    // GUEST receives game state from HOST
+                    if (data.type === 'sync') {
+                        gameState = data.state;
+                        draw(); // Draw immediately upon receiving update
                     }
                 }
-                // 2. Handling Sync (Guest receives World State)
-                else if(data.type === 'sync' && !isHost) {
-                    p1 = data.p1; // Fully overwrite opponent
-                    food = data.food;
-                    
-                    // SMART SYNC for Player 2 (Me):
-                    // Only overwrite position/body, NOT direction (dx/dy).
-                    // This allows my buttons to stay active even if server lags.
-                    p2.x = data.p2.x;
-                    p2.y = data.p2.y;
-                    p2.body = data.p2.body;
-                    
-                    draw(); 
-                }
             });
 
-            conn.on('open', function() {
-                document.getElementById('status').innerText = "Connected! Playing as " + (isHost ? "Blue" : "Green");
-                if(isHost) {
-                    setInterval(gameStep, 100);
+            conn.on('open', () => {
+                document.getElementById('status').innerText = isHost ? "You are BLUE (Host)" : "You are GREEN (Guest)";
+                if (isHost) {
+                    // Only Host runs the game loop
+                    setInterval(gameLoop, 150); // 150ms speed
                 }
             });
         }
 
-        // --- GAME LOGIC (Host Only) ---
-        function gameStep() {
-            moveSnake(p1);
-            moveSnake(p2);
+        // --- INPUT HANDLING ---
+        function handleInput(dir) {
+            // Prevent default touch behavior (scrolling)
+            if(event.cancelable) event.preventDefault();
 
-            if(conn && conn.open) {
-                conn.send({
-                    type: 'sync',
-                    p1: p1,
-                    p2: p2,
-                    food: food
-                });
+            if (isHost) {
+                // If I am Host, I control P1 directly
+                processInput(gameState.p1, dir);
+            } else {
+                // If I am Guest, I just send the command to Host
+                if (conn && conn.open) {
+                    conn.send({ type: 'input', dir: dir });
+                }
             }
+        }
+
+        // --- LOGIC (HOST ONLY) ---
+        function processInput(snake, dir) {
+            // Prevent 180 degree turns
+            if (dir === 'up' && snake.dy === 1) return;
+            if (dir === 'down' && snake.dy === -1) return;
+            if (dir === 'left' && snake.dx === 1) return;
+            if (dir === 'right' && snake.dx === -1) return;
+
+            // Apply direction
+            if (dir === 'up') { snake.dx = 0; snake.dy = -1; }
+            if (dir === 'down') { snake.dx = 0; snake.dy = 1; }
+            if (dir === 'left') { snake.dx = -1; snake.dy = 0; }
+            if (dir === 'right') { snake.dx = 1; snake.dy = 0; }
+        }
+
+        function gameLoop() {
+            updateSnake(gameState.p1);
+            updateSnake(gameState.p2);
+            
+            // Host sends the ENTIRE state to guest
+            if (conn && conn.open) {
+                conn.send({ type: 'sync', state: gameState });
+            }
+            
             draw();
         }
 
-        function moveSnake(snake) {
-            for (let i = snake.body.length - 1; i > 0; i--) {
-                snake.body[i] = snake.body[i-1];
-            }
-            if (snake.body.length) {
-                snake.body[0] = [snake.x, snake.y];
-            }
+        function updateSnake(snake) {
+            // Move Body
+            snake.body.unshift({ x: snake.x, y: snake.y }); // Add head to body start
+            
+            // Move Head
+            snake.x += snake.dx;
+            snake.y += snake.dy;
 
-            snake.x += snake.dx * blockSize;
-            snake.y += snake.dy * blockSize;
+            // Wall Wrap
+            if (snake.x < 0) snake.x = TILE_COUNT - 1;
+            if (snake.x >= TILE_COUNT) snake.x = 0;
+            if (snake.y < 0) snake.y = TILE_COUNT - 1;
+            if (snake.y >= TILE_COUNT) snake.y = 0;
 
-            // Wall Collision (Wrap around)
-            if(snake.x < 0) snake.x = (cols-1)*blockSize;
-            if(snake.x >= cols*blockSize) snake.x = 0;
-            if(snake.y < 0) snake.y = (rows-1)*blockSize;
-            if(snake.y >= rows*blockSize) snake.y = 0;
-
-            // Food
-            if(snake.x === food.x && snake.y === food.y) {
-                snake.body.push([food.x, food.y]);
+            // Eat Food
+            if (snake.x === gameState.food.x && snake.y === gameState.food.y) {
+                // Keep tail (grow)
                 placeFood();
+            } else {
+                snake.body.pop(); // Remove tail (don't grow)
             }
         }
 
         function placeFood() {
-            food.x = Math.floor(Math.random() * cols) * blockSize;
-            food.y = Math.floor(Math.random() * rows) * blockSize;
+            gameState.food.x = Math.floor(Math.random() * TILE_COUNT);
+            gameState.food.y = Math.floor(Math.random() * TILE_COUNT);
         }
 
         // --- DRAWING ---
         function draw() {
-            context.fillStyle = "black";
-            context.fillRect(0, 0, board.width, board.height);
+            // Clear
+            ctx.fillStyle = "black";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-            context.fillStyle = "red";
-            context.fillRect(food.x, food.y, blockSize, blockSize);
+            // Food
+            ctx.fillStyle = "red";
+            ctx.fillRect(gameState.food.x * TILE_SIZE, gameState.food.y * TILE_SIZE, TILE_SIZE - 2, TILE_SIZE - 2);
 
-            drawSnake(p1);
-            drawSnake(p2);
+            // Draw Snakes
+            drawSnake(gameState.p1);
+            drawSnake(gameState.p2);
         }
 
-        function drawSnake(s) {
-            context.fillStyle = s.color;
-            for(let part of s.body) {
-                context.fillRect(part[0], part[1], blockSize, blockSize);
-            }
-            context.fillRect(s.x, s.y, blockSize, blockSize);
-        }
-
-        // --- CONTROLS ---
-        function sendDir(x, y) {
-            // Determine who I am controlling
-            let mySnake = isHost ? p1 : p2;
-
-            // Prevent reversing direction
-            if (mySnake.dx === -x && x !== 0) return;
-            if (mySnake.dy === -y && y !== 0) return;
-            
-            // Update LOCALLY immediately (so it feels responsive)
-            mySnake.dx = x;
-            mySnake.dy = y;
-
-            // Send to opponent
-            if(conn && conn.open) {
-                conn.send({ type: 'move', dx: x, dy: y });
-            }
-        }
-
-        function copyId() {
-            let copyText = document.getElementById("my-id");
-            copyText.select();
-            copyText.setSelectionRange(0, 99999); 
-            navigator.clipboard.writeText(copyText.value);
-            alert("ID Copied: " + copyText.value);
+        function drawSnake(snake) {
+            ctx.fillStyle = snake.color;
+            // Draw Head
+            ctx.fillRect(snake.x * TILE_SIZE, snake.y * TILE_SIZE, TILE_SIZE - 2, TILE_SIZE - 2);
+            // Draw Body
+            snake.body.forEach(part => {
+                ctx.fillRect(part.x * TILE_SIZE, part.y * TILE_SIZE, TILE_SIZE - 2, TILE_SIZE - 2);
+            });
         }
     </script>
+</body>
+</html>
