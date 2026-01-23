@@ -1,136 +1,13 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Online Snake Duel</title>
-    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
-    <style>
-        body {
-            font-family: 'Courier New', Courier, monospace;
-            background-color: #1a1a1a;
-            color: white;
-            text-align: center;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            height: 100vh;
-            margin: 0;
-            overflow: hidden;
-        }
-
-        /* Lobby UI */
-        #lobby {
-            display: flex;
-            flex-direction: column;
-            gap: 15px;
-            background: #333;
-            padding: 20px;
-            border-radius: 10px;
-            border: 2px solid #555;
-            z-index: 10;
-        }
-        input {
-            padding: 10px;
-            font-size: 1rem;
-            text-align: center;
-            width: 200px;
-        }
-        button {
-            padding: 10px 20px;
-            font-size: 1.2rem;
-            cursor: pointer;
-            background: cyan;
-            border: none;
-            border-radius: 5px;
-            font-weight: bold;
-        }
-        button#join-btn { background: lime; }
-
-        /* Game UI */
-        #game-area { display: none; }
-        
-        canvas {
-            background-color: #000;
-            border: 2px solid #555;
-            max-width: 95vw;
-            max-height: 50vh;
-        }
-
-        .controls {
-            margin-top: 15px;
-            display: grid;
-            grid-template-columns: 60px 60px 60px;
-            grid-template-rows: 60px 60px;
-            gap: 5px;
-        }
-        .btn {
-            background-color: #444;
-            color: white;
-            border-radius: 8px;
-            font-size: 1.5rem;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            user-select: none;
-            touch-action: manipulation;
-        }
-        .btn:active { background-color: #666; }
-        .up { grid-column: 2; grid-row: 1; }
-        .left { grid-column: 1; grid-row: 2; }
-        .down { grid-column: 2; grid-row: 2; }
-        .right { grid-column: 3; grid-row: 2; }
-
-        /* Status messages */
-        #status { color: yellow; margin-bottom: 10px; font-size: 0.9rem;}
-        #my-id-display { font-size: 0.8rem; color: #aaa; margin-bottom: 5px;}
-    </style>
-</head>
-<body>
-
-    <div id="lobby">
-        <h2>Snake Duel Online</h2>
-        <div id="loading">Connecting to global server...</div>
-        
-        <div id="menu" style="display:none;">
-            <p>1. Send your ID to a friend:</p>
-            <div style="display:flex; gap:5px; justify-content:center;">
-                <input type="text" id="my-id" readonly>
-                <button onclick="copyId()" style="font-size:0.8rem; padding:5px;">Copy</button>
-            </div>
-            
-            <p>OR</p>
-            
-            <p>2. Paste friend's ID here:</p>
-            <input type="text" id="friend-id" placeholder="Paste ID here">
-            <br>
-            <button id="join-btn" onclick="joinGame()">Join Game</button>
-        </div>
-    </div>
-
-    <div id="game-area">
-        <div id="status">Waiting for opponent...</div>
-        <canvas id="board"></canvas>
-        
-        <div class="controls">
-            <div class="btn up" ontouchstart="sendDir(0, -1)" onclick="sendDir(0, -1)">▲</div>
-            <div class="btn left" ontouchstart="sendDir(-1, 0)" onclick="sendDir(-1, 0)">◀</div>
-            <div class="btn down" ontouchstart="sendDir(0, 1)" onclick="sendDir(0, 1)">▼</div>
-            <div class="btn right" ontouchstart="sendDir(1, 0)" onclick="sendDir(1, 0)">▶</div>
-        </div>
-    </div>
-
-    <script>
+<script>
         // --- GAME VARIABLES ---
         const blockSize = 20;
         const rows = 25;
         const cols = 20;
         let board, context;
         let isHost = false;
-        let gameLoop;
         
         // P1 = Host (Blue), P2 = Guest (Lime)
+        // We track direction (dx, dy) separately to prevent "lag fighting"
         let p1 = { x: 5*blockSize, y: 5*blockSize, dx: 0, dy: 0, body: [], color: "cyan" };
         let p2 = { x: 15*blockSize, y: 15*blockSize, dx: 0, dy: 0, body: [], color: "lime" };
         let food = { x: 10*blockSize, y: 10*blockSize };
@@ -139,9 +16,7 @@
         let peer;
         let conn;
         
-        // Initialize PeerJS
         window.onload = function() {
-            // Create a random ID for this player
             peer = new Peer(); 
 
             peer.on('open', function(id) {
@@ -159,21 +34,19 @@
         }
 
         function joinGame() {
-            let friendId = document.getElementById('friend-id').value;
+            // .trim() removes accidental spaces from copy-pasting
+            let friendId = document.getElementById('friend-id').value.trim();
             if(!friendId) return alert("Enter an ID!");
             
-            // Connect to the host
             conn = peer.connect(friendId);
             isHost = false;
             setupConnection();
         }
 
         function setupConnection() {
-            // Remove Lobby, Show Game
             document.getElementById('lobby').style.display = 'none';
             document.getElementById('game-area').style.display = 'flex';
             
-            // Setup Canvas
             board = document.getElementById("board");
             board.height = rows * blockSize;
             board.width = cols * blockSize;
@@ -181,26 +54,34 @@
 
             // Handle incoming data
             conn.on('data', function(data) {
+                // 1. Handling Moves (Host receives Guest input)
                 if(data.type === 'move') {
-                    // Update opponent direction
-                    let p = isHost ? p2 : p1; // If I am host, data is from P2
-                    if(p.dx !== -data.dx && p.dy !== -data.dy) {
-                        p.dx = data.dx;
-                        p.dy = data.dy;
+                    // Only Host processes moves from network
+                    if (isHost) {
+                        if(p2.dx !== -data.dx && p2.dy !== -data.dy) {
+                            p2.dx = data.dx;
+                            p2.dy = data.dy;
+                        }
                     }
                 }
+                // 2. Handling Sync (Guest receives World State)
                 else if(data.type === 'sync' && !isHost) {
-                    // Guest receives full game state from Host
-                    p1 = data.p1;
-                    p2 = data.p2;
+                    p1 = data.p1; // Fully overwrite opponent
                     food = data.food;
-                    draw(); // Just draw, don't update logic (Host handles logic)
+                    
+                    // SMART SYNC for Player 2 (Me):
+                    // Only overwrite position/body, NOT direction (dx/dy).
+                    // This allows my buttons to stay active even if server lags.
+                    p2.x = data.p2.x;
+                    p2.y = data.p2.y;
+                    p2.body = data.p2.body;
+                    
+                    draw(); 
                 }
             });
 
             conn.on('open', function() {
                 document.getElementById('status').innerText = "Connected! Playing as " + (isHost ? "Blue" : "Green");
-                // Only Host runs the game loop
                 if(isHost) {
                     setInterval(gameStep, 100);
                 }
@@ -209,11 +90,9 @@
 
         // --- GAME LOGIC (Host Only) ---
         function gameStep() {
-            // Move Snakes
             moveSnake(p1);
             moveSnake(p2);
 
-            // Host sends updated state to Guest
             if(conn && conn.open) {
                 conn.send({
                     type: 'sync',
@@ -222,12 +101,10 @@
                     food: food
                 });
             }
-
             draw();
         }
 
         function moveSnake(snake) {
-            // Logic to move body
             for (let i = snake.body.length - 1; i > 0; i--) {
                 snake.body[i] = snake.body[i-1];
             }
@@ -256,19 +133,15 @@
             food.y = Math.floor(Math.random() * rows) * blockSize;
         }
 
-        // --- DRAWING (Both Players) ---
+        // --- DRAWING ---
         function draw() {
-            // Background
             context.fillStyle = "black";
             context.fillRect(0, 0, board.width, board.height);
 
-            // Food
             context.fillStyle = "red";
             context.fillRect(food.x, food.y, blockSize, blockSize);
 
-            // Player 1 (Blue)
             drawSnake(p1);
-            // Player 2 (Green)
             drawSnake(p2);
         }
 
@@ -280,17 +153,20 @@
             context.fillRect(s.x, s.y, blockSize, blockSize);
         }
 
-        // --- INPUTS ---
+        // --- CONTROLS ---
         function sendDir(x, y) {
-            // 1. Update my own local visual immediately (for responsiveness)
+            // Determine who I am controlling
             let mySnake = isHost ? p1 : p2;
+
+            // Prevent reversing direction
             if (mySnake.dx === -x && x !== 0) return;
             if (mySnake.dy === -y && y !== 0) return;
             
+            // Update LOCALLY immediately (so it feels responsive)
             mySnake.dx = x;
             mySnake.dy = y;
 
-            // 2. Send move to opponent
+            // Send to opponent
             if(conn && conn.open) {
                 conn.send({ type: 'move', dx: x, dy: y });
             }
@@ -304,5 +180,3 @@
             alert("ID Copied: " + copyText.value);
         }
     </script>
-</body>
-</html>
